@@ -1,15 +1,13 @@
-#[path="../../../MPC/src/mpc_crate.rs"]
-pub mod mpc_crate;
-#[path="../../../LosslessConvexification/rust_lossless/src/lossless.rs"]
-pub mod lossless;
+pub use ::MPC::mpc_crate;
+pub use rust_lossless::lossless;
 use ndarray::{Array1, Array2};
 use std::f64::consts::PI;
 use clarabel::algebra::*;
 use clarabel::solver::*;
 use std::time::Instant;
-use crate::mpc_crate::MPCDebugInfo;
+use ::MPC::mpc_crate::MPCDebugInfo;
 use crate::device_sim::{RefreshUpdater, noise_1_d};
-use crate::lossless::*;
+use rust_lossless::lossless::*;
 
 #[derive(Debug, Clone)]
 pub struct MPC {
