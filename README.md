@@ -1,4 +1,4 @@
-# dynamics
+# simulations
 
 Vehicle-agnostic **dynamics models & flight simulation** for GT Propulsive Landers —
 the plant models controllers and estimators are developed and tested against.
