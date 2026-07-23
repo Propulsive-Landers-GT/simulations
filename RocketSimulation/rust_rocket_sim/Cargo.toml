@@ -19,8 +19,8 @@ optimization_engine = "0.6.0"
 ndarray-linalg = { version = "0.16", features = ["openblas-system"] }
 csv = "1.4.0"
 serde = { version = "1", features = ["derive"] }
-Lander = { git = "https://github.com/GTPL-Testing/monoprop-flight-software.git" }
-MPC = { git = "https://github.com/GTPL-Testing/control.git" }
-rust_lossless = { git = "https://github.com/GTPL-Testing/guidance.git" }
+Lander = { git = "https://github.com/Propulsive-Landers-GT/monoprop-flight-software.git" }
+MPC = { git = "https://github.com/Propulsive-Landers-GT/control.git" }
+rust_lossless = { git = "https://github.com/Propulsive-Landers-GT/guidance.git" }
 openblas-src = { version = "0.10", features = ["rustls"] }
 
