@@ -23,4 +23,5 @@ Lander = { git = "https://github.com/Propulsive-Landers-GT/monoprop-flight-softw
 MPC = { git = "https://github.com/Propulsive-Landers-GT/control.git" }
 rust_lossless = { git = "https://github.com/Propulsive-Landers-GT/guidance.git" }
 openblas-src = { version = "0.10", features = ["rustls"] }
+rayon = "1.12.0"
 

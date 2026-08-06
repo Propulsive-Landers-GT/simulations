@@ -18,6 +18,8 @@ use nalgebra::{Matrix3, Vector3, Vector4, UnitQuaternion};
 use ndarray::{Array1, Array2};
 use std::fs::File;
 use std::io::{Write, BufWriter, Result};
+pub mod mpc_tuning; // 🚀 ADD THIS LINE
+use crate::mpc_tuning::MPC_Simulation; // 🚀 ADD THIS IMPORT
 
 
 pub fn export_imu_to_csv(
@@ -70,18 +72,46 @@ pub fn export_imu_to_csv(
 }
 
 fn main() {
-    let mut sim = Simulation::default();
-    sim.debug = true;
-    // sim.rocket.position = Vector3::new(0.0, 0.0, 49.0);
-    // sim.start_state = "hover".to_string();
-    // sim.min_time = 3.0;
+    // let mut sim = Simulation::default();
+    // sim.debug = true;
+    // // sim.rocket.position = Vector3::new(0.0, 0.0, 49.0);
+    // // sim.start_state = "hover".to_string();
+    // // sim.min_time = 3.0;
 
-    sim.init();
+    // sim.init();
 
-    while sim.step() {}
+    // while sim.step() {}
 
-    sim.finish_sim();
+    // sim.finish_sim();
 
-    export_imu_to_csv("flight_data.csv", &sim.rocket.debug_info.times, &sim.rocket.debug_info.imu_readings, &sim.rocket.debug_info.attitudes).unwrap();
+    // export_imu_to_csv("flight_data.csv", &sim.rocket.debug_info.times, &sim.rocket.debug_info.imu_readings, &sim.rocket.debug_info.attitudes).unwrap();
     
+
+    
+    let mode_tune = true; // Set to true to run the genetic algorithm, false for a standard flight
+
+    if mode_tune {
+        let tuner = MPC_Simulation::new();
+        let best_weights = tuner.run_genetic_algorithm();
+        
+        println!("\n🏆 TUNING COMPLETE! Optimal MPC Descent Configuration 🏆");
+        println!("{:#?}", best_weights);
+        println!("Copy these values into your `FlightPhase::Descent` initialization block!");
+        
+    } else {
+        // Your original simulation logic
+        let mut sim = Simulation::default();
+        sim.debug = true;
+        // sim.rocket.position = Vector3::new(0.0, 0.0, 49.0);
+        // sim.start_state = "hover".to_string();
+        // sim.min_time = 3.0;
+
+        sim.init();
+
+        while sim.step() {}
+
+        sim.finish_sim();
+
+        export_imu_to_csv("flight_data.csv", &sim.rocket.debug_info.times, &sim.rocket.debug_info.imu_readings, &sim.rocket.debug_info.attitudes).unwrap();
+    }
 }
