@@ -27,22 +27,26 @@ pub struct MpcWeights {
 impl MpcWeights {
     pub fn random(rng: &mut impl Rng) -> Self {
         Self {
-            // Stage Costs
-            q_pos_xy: rng.gen_range(100.0..3000.0),
+            // 🛡️ NUMERICALLY STABLE STAGE COSTS
+            // 🔥 INCREASED: Force aggressive lateral correction early in the flight
+            q_pos_xy: rng.gen_range(1000.0..10_000.0), 
             q_pos_z: rng.gen_range(500.0..5000.0),
-            q_vel_xy: rng.gen_range(100.0..2000.0),
-            q_vel_z: rng.gen_range(5000.0..50_000.0), // 🚀 Raised to track descent speed strictly
-            q_q_xy: rng.gen_range(20000.0..300000.0), 
-            q_omega_xy: rng.gen_range(100.0..2500.0),
-            q_omega_z: rng.gen_range(100.0..2500.0),
+            q_vel_xy: rng.gen_range(1000.0..10_000.0),
+            q_vel_z: rng.gen_range(5000.0..30_000.0), 
+            
+            // 🔥 INCREASED: Demand stricter adherence to pointing straight up
+            q_q_xy: rng.gen_range(100_000.0..500_000.0), 
+            
+            // 🔥 LOWERED: Allow it to swing its angular velocity faster to aggressively correct
+            q_omega_xy: rng.gen_range(100.0..1000.0),
+            q_omega_z: rng.gen_range(100.0..1000.0),
 
-            // Terminal Costs
-            qn_pos_xy: rng.gen_range(1000.0..10_000.0), // 🚀 Raised for pinpoint accuracy
-            qn_pos_z: rng.gen_range(50_000.0..300_000.0),
+            // 🛡️ NUMERICALLY STABLE TERMINAL COSTS
+            qn_pos_xy: rng.gen_range(1000.0..10_000.0), 
+            qn_pos_z: rng.gen_range(10_000.0..100_000.0),
             qn_vel_xy: rng.gen_range(1000.0..10_000.0),
-            // 🚨 GIGANTIC BOUND INCREASE FOR TERMINAL Z VELOCITY 🚨
-            qn_vel_z: rng.gen_range(50_000.0..1_000_000.0), 
-            qn_q_xy: rng.gen_range(50000.0..300000.0), 
+            qn_vel_z: rng.gen_range(50_000.0..250_000.0), 
+            qn_q_xy: rng.gen_range(50_000.0..200_000.0), 
             qn_omega_xy: rng.gen_range(200.0..5000.0),
             qn_omega_z: rng.gen_range(200.0..5000.0),
         }
@@ -59,9 +63,9 @@ pub struct MPC_Simulation {
 impl MPC_Simulation {
     pub fn new() -> Self {
         MPC_Simulation {
-            population_size: 150,  // Slightly larger population for better diversity
-            generations: 60,       
-            mutation_rate: 0.25,   
+            population_size: 150,  
+            generations: 80,       // Let it bake longer
+            mutation_rate: 0.30,   // High mutation for escaping local minima
             elite_count: 5,        
         }
     }
@@ -80,8 +84,21 @@ impl MPC_Simulation {
                 .par_iter()
                 .enumerate()
                 .map(|(i, weights)| {
-                    let score = Self::evaluate_flight(weights);
-                    (i, score)
+                    // 🚀 MULTI-SCENARIO EVALUATION 🚀
+                    // The weights must prove they are robust enough to handle 4 different approaches
+                    let scenarios = [
+                        Vector3::new(0.0, 0.0, 50.0),    // Straight down
+                        Vector3::new(5.0, 0.0, 50.0),    // 5m East offset
+                        Vector3::new(0.0, 5.0, 50.0),    // 5m North offset
+                        Vector3::new(-3.5, -3.5, 50.0),  // ~5m Diagonal offset
+                    ];
+
+                    let mut total_score = 0.0;
+                    for start_pos in scenarios.iter() {
+                        total_score += Self::evaluate_flight(weights, *start_pos);
+                    }
+
+                    (i, total_score)
                 })
                 .collect();
 
@@ -90,12 +107,16 @@ impl MPC_Simulation {
             let best_score = scores[0].1;
             let best_weights = population[scores[0].0].clone();
 
-            println!("🧬 Generation {:02} | Best Score: {:.2}", generation_idx, best_score);
+            println!("🧬 Generation {:02} | Best Combined Score: {:.2}", generation_idx, best_score);
             
-            // If the score is less than 1000, it's essentially a perfect landing!
-            if best_score < 1000.0 {
-                println!("🎉 OPTIMAL TUNE FOUND EARLY!");
+            // With 4 scenarios, a combined score under 4000 is an incredible multi-landing tune
+            if best_score < 4000.0 {
+                println!("🎉 OPTIMAL ROBUST TUNE FOUND EARLY!");
                 return best_weights;
+            }
+
+            if generation_idx % 10 == 0 || generation_idx == self.generations - 1 {
+                println!("   ↳ Best Weights: {:#?}", best_weights);
             }
 
             let mut next_generation = Vec::with_capacity(self.population_size);
@@ -117,17 +138,18 @@ impl MPC_Simulation {
             population = next_generation;
         }
 
-        println!("   ↳ Final Best Weights: {:#?}", population[0]);
         population[0]
     }
 
-    fn evaluate_flight(weights: &MpcWeights) -> f64 {
+    /// Runs a single simulation to completion and returns a fitness score.
+    fn evaluate_flight(weights: &MpcWeights, start_pos: Vector3<f64>) -> f64 {
         let mut sim = Simulation::default();
         sim.debug = false; 
         
-        // Start 50m up, offset by 15m to force it to maneuver back to the pad
-        sim.rocket.position = Vector3::new(15.0, 15.0, 50.0);
+        // 🚀 INJECT SCENARIO STARTING POSITION
+        sim.rocket.position = start_pos;
         sim.start_state = "descent".to_string();
+        
         sim.init();
 
         let q_vec = vec![
@@ -152,11 +174,57 @@ impl MPC_Simulation {
             mpc.set_manual_weights(true, Some(q_matrix), Some(r_matrix), Some(qn_matrix));
         }
 
-        // Give the sim extra time to perform a slow, soft hover-landing
         let mut steps = 0;
-        let max_steps = 6_000; 
+        let max_steps = 5_000; 
+
+        // 🚀 METRICS TRACKING 🚀
+        let mut tracking_error_sum = 0.0;
+        let mut tracking_steps = 0;
+        let mut max_tilt = 0.0_f64;
+
         while sim.step() {
             steps += 1;
+            
+            // Track max tilt
+            let tilt_rad = (sim.rocket.attitude * Vector3::z()).z.clamp(-1.0, 1.0).acos();
+            let tilt_deg = tilt_rad.to_degrees();
+            if tilt_deg > max_tilt { max_tilt = tilt_deg; }
+
+            // 🚀 INTERPOLATE TRAJECTORY & CALCULATE TRACKING ERROR 🚀
+            let state = sim.fsm.get_state_mut();
+            if let Some(traj) = &state.trajectory_state {
+                let now = state.last_navigation_update;
+                let time_since_traj = now - state.trajectory_generation_time;
+                
+                let target_pos = if time_since_traj >= traj.time_of_flight_s || traj.positions.is_empty() {
+                    if let Some(&last_pos) = traj.positions.last() {
+                        Vector3::new(last_pos[0], last_pos[1], last_pos[2])
+                    } else {
+                        Vector3::new(0.0, 0.0, 0.0)
+                    }
+                } else {
+                    let traj_dt = (traj.time_of_flight_s / (traj.positions.len() - 1) as f64).max(1e-4);
+                    let exact_idx = time_since_traj / traj_dt;
+                    let base_idx = exact_idx.floor() as usize;
+                    let safe_idx = base_idx.min(traj.positions.len().saturating_sub(2));
+                    let clamped_frac = (exact_idx - safe_idx as f64).clamp(0.0, 1.0);
+                    
+                    let p0 = traj.positions[safe_idx];
+                    let p1 = traj.positions[safe_idx + 1];
+                    
+                    Vector3::new(
+                        p0[0] + clamped_frac * (p1[0] - p0[0]),
+                        p0[1] + clamped_frac * (p1[1] - p0[1]),
+                        p0[2] + clamped_frac * (p1[2] - p0[2])
+                    )
+                };
+                
+                // Compare where the rocket IS to where the Lossless planner WANTS it to be
+                let dist = (sim.rocket.position - target_pos).norm();
+                tracking_error_sum += dist;
+                tracking_steps += 1;
+            }
+
             if steps > max_steps { break; }
         }
 
@@ -166,37 +234,40 @@ impl MPC_Simulation {
         let final_pos = sim.rocket.position;
         let final_vel = sim.rocket.velocity;
 
-        // --- 📊 QUARTIC (x^4) COST FUNCTION 📊 ---
-        // This violently punishes any landing > 1m off target or > 1m/s fast.
+        // --- 📊 PRECISION FITNESS FUNCTION 📊 ---
 
-        // 1. Landing Accuracy (Miss Distance) 
-        let miss_xy = (final_pos.x.powi(2) + final_pos.y.powi(2)).sqrt();
-        score += miss_xy.powi(4) * 20_000.0; 
+        // 1. Lossless Tracking Error (Did it trace the glide slope?)
+        if tracking_steps > 0 {
+            let avg_tracking_error = tracking_error_sum / (tracking_steps as f64);
+            score += avg_tracking_error.powi(2) * 50_000.0;
+        }
 
-        // 2. Vertical Touchdown Speed (The Ultimate Priority)
+        // 2. Terminal Velocity (Must land softly!)
         let vel_z = final_vel.z.abs();
-        score += vel_z.powi(4) * 100_000.0; 
+        score += vel_z.powi(2) * 20_000.0; 
+        score += vel_z * 250_000.0; // Linear kicker to force it all the way to 0.0 m/s
 
-        // 3. Lateral Sliding Speed (Kill drifting)
-        let vel_xy = (final_vel.x.powi(2) + final_vel.y.powi(2)).sqrt();
-        score += vel_xy.powi(4) * 50_000.0;
+        // 3. Final Landing Accuracy (Did it touch the pad?)
+        let miss_xy = (final_pos.x.powi(2) + final_pos.y.powi(2)).sqrt();
+        score += miss_xy.powi(2) * 5_000.0; 
+        
+        // 4. Strict Tilt Penalty
+        if max_tilt > 10.0 {
+            score += (max_tilt - 10.0).powi(2) * 100_000.0;
+        }
 
-        // 4. Fuel Efficiency (Very light, linear tie-breaker)
-        let initial_fuel = 80.0; 
-        let fuel_consumed = initial_fuel - (sim.rocket.nitrous_mass + sim.rocket.fuel_grain_mass);
-        score += fuel_consumed * 2.0; 
-
-        // 5. Hard Constraint Violations
+        // 5. Constraints
         if final_pos.z > 2.0 || steps > max_steps {
-            score += 5_000_000.0; // Hovered away or failed to land
+            score += 500_000_000.0; // Flew away or timed out
         }
         if hit_angle_limit {
-            score += 2_000_000.0; // Tipped over and crashed
+            score += 500_000_000.0; // Tipped over
         }
 
         score
     }
 
+    /// Breeds two parents and occasionally mutates the offspring
     fn crossover_and_mutate(&self, p1: &MpcWeights, p2: &MpcWeights, rng: &mut impl Rng) -> MpcWeights {
         let mut child = MpcWeights {
             q_pos_xy: if rng.random_bool(0.5) { p1.q_pos_xy } else { p2.q_pos_xy },
@@ -216,9 +287,6 @@ impl MPC_Simulation {
             qn_omega_z: if rng.random_bool(0.5) { p1.qn_omega_z } else { p2.qn_omega_z },
         };
 
-        // 🚀 WIDER MUTATION BOUNDS
-        // Allow the weights to mutate anywhere from half (0.5x) to double (2.0x) their size
-        // This stops it from getting stuck in a local minimum!
         if rng.random_bool(self.mutation_rate) { child.q_pos_xy *= rng.gen_range(0.5..2.0); }
         if rng.random_bool(self.mutation_rate) { child.q_pos_z *= rng.gen_range(0.5..2.0); }
         if rng.random_bool(self.mutation_rate) { child.q_vel_xy *= rng.gen_range(0.5..2.0); }
