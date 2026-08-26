@@ -6,6 +6,7 @@ pub mod fluid_dynamics;
 pub mod wind_sim;
 pub mod aero_tables;
 pub mod simulation;
+pub mod mpc_test;
 use crate::rocket_dynamics::*;
 use crate::device_sim::*;
 use crate::algorithms::*;
@@ -86,9 +87,10 @@ fn main() {
 
     // export_imu_to_csv("flight_data.csv", &sim.rocket.debug_info.times, &sim.rocket.debug_info.imu_readings, &sim.rocket.debug_info.attitudes).unwrap();
     
-
+    // crate::mpc_test::run_constant_velocity_test();
+    // return;
     
-    let mode_tune = true; // Set to true to run the genetic algorithm, false for a standard flight
+    let mode_tune = false; // Set to true to run the genetic algorithm, false for a standard flight
 
     if mode_tune {
         let tuner = MPC_Simulation::new();
