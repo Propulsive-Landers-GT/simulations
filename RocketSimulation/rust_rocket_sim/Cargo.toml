@@ -24,4 +24,14 @@ MPC = { git = "https://github.com/Propulsive-Landers-GT/control.git" }
 rust_lossless = { git = "https://github.com/Propulsive-Landers-GT/guidance.git" }
 openblas-src = { version = "0.10", features = ["rustls"] }
 rayon = "1.12.0"
+# Ground-station wire protocol, used by the `--ground-station` run mode.
+# TODO: becomes a git dependency once the ground-station repo is pushed:
+#       gs-protocol = { git = "https://github.com/Propulsive-Landers-GT/ground-station.git" }
+gs-protocol = { path = "../../../ground-station/crates/gs-protocol" }
 
+# ground-station-link development: build against the LOCAL Lander checkout (branch
+# `ground-station-link` of monoprop-flight-software, cloned next to this repo), which has the
+# telemetry module the `--ground-station` mode needs.
+# TODO: remove this patch once that branch is merged, so the git dependency above is used again.
+[patch."https://github.com/Propulsive-Landers-GT/monoprop-flight-software.git"]
+Lander = { path = "../../../monoprop-flight-software/Lander" }
