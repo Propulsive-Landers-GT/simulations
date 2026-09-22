@@ -50,7 +50,7 @@ pub fn run(options: Options) {
         }
     };
     println!("Ground-station mode: listening on UDP port {}, waiting for a ground station heartbeat.", options.port);
-    println!("Start the bridge (ground-station repo: cargo run --release --bin gs-bridge), then Arm and Launch from the GUI.");
+    println!("Start the bridge (ground-system repo: cargo run --release --bin gs-bridge), then Arm and Launch from the GUI.");
 
     loop {
         let mut sim = pad_simulation(options.rerun);
@@ -242,7 +242,7 @@ fn stand_telemetry(sim: &Simulation, now: f64) -> StandTelemetry {
         });
     }
 
-    StandTelemetry { time_s: now, source: Source::Sim, channels, valves }
+    StandTelemetry { time_s: now, source: Source::Sim, channels, valves, outputs_on: Vec::new(), mtv_percent: None }
 }
 
 /// Paces simulated time to the wall clock.
