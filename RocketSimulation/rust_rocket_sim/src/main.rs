@@ -21,6 +21,7 @@ use std::fs::File;
 use std::io::{Write, BufWriter, Result};
 pub mod mpc_tuning; // 🚀 ADD THIS LINE
 use crate::mpc_tuning::MPC_Simulation; // 🚀 ADD THIS IMPORT
+pub mod ground_station;
 
 
 pub fn export_imu_to_csv(
@@ -90,6 +91,14 @@ fn main() {
     // crate::mpc_test::run_constant_velocity_test();
     // return;
     
+    // `cargo run --release -- --ground-station [--port 8888] [--loop] [--rerun]`:
+    // real-time flight from the pad, commanded from the ground station GUI (see ground_station.rs)
+    let args: Vec<String> = std::env::args().collect();
+    if args.iter().any(|a| a == "--ground-station") {
+        ground_station::run(ground_station::Options::from_args(&args));
+        return;
+    }
+
     let mode_tune = false; // Set to true to run the genetic algorithm, false for a standard flight
 
     if mode_tune {

@@ -103,6 +103,9 @@ impl Simulation {
             "descent" => {
                 self.fsm.set_flight_phase(Lander::state::FlightPhase::Descent, 0.0);
             }
+            "standby" => {
+                // On the pad, waiting for Arm / Launch from the ground station (see ground_station.rs)
+            }
             _ => {
                 self.fsm.arm(0.0);
                 self.fsm.launch(0.0);
@@ -111,6 +114,31 @@ impl Simulation {
 
         let (_, _, yaw) = self.rocket.attitude.euler_angles();
         self.rcs_controller.update(yaw, self.rocket.ang_vel.z, -10.0);
+    }
+
+    /// What the flight computer sees this tick (also used for ground-station telemetry)
+    pub fn sensor_data(&self) -> Lander::state::SensorData {
+        // Construct SensorData from simulated sensors
+        let imu_reading = &self.rocket.imu.last_reading;
+        let gps_reading = &self.rocket.gps.last_reading;
+        let uwb_reading = &self.rocket.uwb.last_reading;
+
+        Lander::state::SensorData {
+            timestamp: self.current_time,
+            imu_data: Some(Lander::state::ImuData {
+                accel: [imu_reading.accel.x, imu_reading.accel.y, imu_reading.accel.z],
+                gyro: [imu_reading.gyro.x, imu_reading.gyro.y, imu_reading.gyro.z],
+                mag: [imu_reading.mag.x, imu_reading.mag.y, imu_reading.mag.z],
+            }),
+            gps_data: Some([gps_reading.position.x, gps_reading.position.y, gps_reading.position.z]),
+            uwb_data: if (self.rocket.position - self.rocket.uwb.origin).norm() <= self.rocket.uwb.range {
+                Some([uwb_reading.position.x, uwb_reading.position.y, uwb_reading.position.z])
+            } else {
+                None
+            },
+            chamber_pressure: Some(self.rocket.m2_pt.last_reading.pressure_bar),
+            tank_pressure: Some(self.rocket.o_pt.last_reading.pressure_bar),
+        }
     }
 
     pub fn step(&mut self) -> bool {
@@ -143,27 +171,7 @@ impl Simulation {
             self.has_exceeded_angle = true;
         }
 
-        // Construct SensorData from simulated sensors
-        let imu_reading = &self.rocket.imu.last_reading;
-        let gps_reading = &self.rocket.gps.last_reading;
-        let uwb_reading = &self.rocket.uwb.last_reading;
-
-        let sensor_data = Lander::state::SensorData {
-            timestamp: self.current_time,
-            imu_data: Some(Lander::state::ImuData {
-                accel: [imu_reading.accel.x, imu_reading.accel.y, imu_reading.accel.z],
-                gyro: [imu_reading.gyro.x, imu_reading.gyro.y, imu_reading.gyro.z],
-                mag: [imu_reading.mag.x, imu_reading.mag.y, imu_reading.mag.z],
-            }),
-            gps_data: Some([gps_reading.position.x, gps_reading.position.y, gps_reading.position.z]),
-            uwb_data: if (self.rocket.position - self.rocket.uwb.origin).norm() <= self.rocket.uwb.range {
-                Some([uwb_reading.position.x, uwb_reading.position.y, uwb_reading.position.z])
-            } else {
-                None
-            },
-            chamber_pressure: Some(self.rocket.m2_pt.last_reading.pressure_bar),
-            tank_pressure: Some(self.rocket.o_pt.last_reading.pressure_bar),
-        };
+        let sensor_data = self.sensor_data();
 
         // Step the Flight State Machine
         let control_input_opt = self.fsm.step(&sensor_data);

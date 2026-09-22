@@ -24,4 +24,5 @@ MPC = { git = "https://github.com/Propulsive-Landers-GT/control.git" }
 rust_lossless = { git = "https://github.com/Propulsive-Landers-GT/guidance.git" }
 openblas-src = { version = "0.10", features = ["rustls"] }
 rayon = "1.12.0"
-
+# Ground-station wire protocol, used by the `--ground-station` run mode.
+gs-protocol = { git = "https://github.com/Propulsive-Landers-GT/ground-system.git" }
