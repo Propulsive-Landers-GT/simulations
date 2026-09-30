@@ -75,26 +75,60 @@ Its version must match the `rerun = "0.28"` line in `Cargo.toml`.
 
 ## 2. Run the Rust flight sim
 
-Step 1: build. The first build takes about 10 minutes; later ones are quick.
-Run this from `RocketSimulation/rust_rocket_sim`:
+### Windows: one-time toolchain setup (GNU + MSYS2)
+The GNU Rust toolchain needs MinGW tools (`gcc`, `dlltool`) and a system OpenBLAS. The easiest way to get all
+of them is MSYS2. Do this once:
 
-```bash
+1. **Use the GNU Rust toolchain** (PowerShell):
+   ```powershell
+   rustup default stable-x86_64-pc-windows-gnu
+   ```
+2. **Install MSYS2** from https://www.msys2.org. The default location is `C:\msys64`; any folder works
+   (for example `C:\Tools\MSYS2`). Swap in your folder wherever `C:\msys64` appears below.
+3. **Install the compiler, pkg-config, and OpenBLAS.** Open the **MSYS2 UCRT64** app from the Start menu and run:
+   ```bash
+   pacman -S --needed mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-openblas
+   ```
+4. **Add `C:\msys64\ucrt64\bin` to your `Path`.** Open Start, search for "Edit the system environment variables",
+   click Environment Variables, select `Path` under *User variables*, click Edit, click New, and paste
+   `C:\msys64\ucrt64\bin`. This one folder gives the build `gcc`, `dlltool`, and `pkg-config`, and gives the sim
+   `libopenblas.dll` when it runs. You don't need `LIBRARY_PATH` with this setup.
+
+### Step 1: build
+The first build takes a few minutes; later ones are quick. From `RocketSimulation\rust_rocket_sim`:
+
+```powershell
 cargo build --release
 ```
 
-Step 2: open the viewer in its own terminal and leave it running:
+Dozens of `warning:` lines (unused variables and so on) are normal. It worked if it ends with `Finished release`.
 
-```bash
-.venv/Scripts/rerun.exe
+### Step 2: Terminal 1, start the viewer and leave it running
+From the `simulations` folder:
+
+```powershell
+.venv\Scripts\rerun.exe
 ```
 
-Step 3: run the sim from `RocketSimulation/rust_rocket_sim`:
+### Step 3: Terminal 2, run the sim
+Open a second terminal:
 
-```bash
-./target/release/rust_rocket_sim.exe
+```powershell
+cd RocketSimulation\rust_rocket_sim
+cargo run --release
 ```
 
-(On macOS, `.venv/bin/rerun` and `./target/release/rust_rocket_sim`.)
+`cargo run --release` rebuilds if you changed code, then runs. `.\target\release\rust_rocket_sim.exe` runs the
+last build directly.
+
+(On macOS: `.venv/bin/rerun` in terminal 1, and `cargo run --release` in terminal 2.)
+
+### Errors we hit on Windows, and the fixes
+| Error during `cargo build` | Cause | Fix |
+|---|---|---|
+| `error calling dlltool 'dlltool.exe': program not found` | GNU toolchain, but MinGW isn't installed or isn't on `Path` | Setup steps 2–5 |
+| `openblas-src` build script panics with `Failed to exec cygpath` | OpenBLAS isn't installed in MSYS2, so `pkg-config` can't find it and the build falls back to `cygpath` | In PowerShell: `C:\msys64\usr\bin\pacman.exe -S --needed mingw-w64-ucrt-x86_64-openblas` (or `pacman -S --needed mingw-w64-ucrt-x86_64-openblas` in the MSYS2 UCRT64 shell or `C:\Tools\MSYS2\usr\bin\pacman.exe -S mingw-w64-ucrt-x86_64-openblas` ), then rebuild |
+| `could not find Cargo.toml` | You're in the wrong folder | `cd RocketSimulation\rust_rocket_sim` first |
 
 ### What you'll see
 - Terminal: one summary line per simulated second, plus a lot of per-step debug output:
@@ -120,20 +154,6 @@ You'll also see `Warning: Failed to load aero lookup table (aero_table.csv: expe
 falling back to static drag.` on startup. Also expected for now: the checked-in table is the wrong shape, so the
 sim uses a simpler drag model.
 
-### Without the environment variables (Windows)
-If you skipped step 3 of the OpenBLAS setup, pass the paths explicitly every time (Git Bash):
-
-```bash
-LIBRARY_PATH="C:\path\to\openblas\lib" cargo build --release
-```
-
-```bash
-PATH="/c/path/to/openblas/bin:$PATH" ./target/release/rust_rocket_sim.exe
-```
-
-In PowerShell: `$env:LIBRARY_PATH = "C:\path\to\openblas\lib"` and `$env:PATH = "C:\path\to\openblas\bin;$env:PATH"`.
-
----
 
 ## 3. Changing what the sim does
 
