@@ -34,6 +34,7 @@ pub struct Simulation {
     pub end_state: String,
     pub end_stage: i32,
     pub rec: Option<RecordingStream>,
+    pub mcap: Option<Lander::mcap_logger::McapLogger>,
 }
 
 impl Default for Simulation {
@@ -54,6 +55,7 @@ impl Default for Simulation {
             end_state: "none".to_string(),
             end_stage: 0,
             rec: None,
+            mcap: None,
         }
     }
 }
