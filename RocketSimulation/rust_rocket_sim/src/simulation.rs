@@ -184,6 +184,17 @@ impl Simulation {
             Vector4::new(self.held_control.x, self.held_control.y, self.held_control.z, 0.0)
         };
 
+        // Record this tick to the MCAP file, if --mcap was given
+        if let Some(logger) = self.mcap.as_mut() {
+            let timestamp_ns = (self.current_time * 1e9).round() as u64;
+            let _ = logger.log_sensor_data(timestamp_ns, &sensor_data);
+            if let Some(out) = control_input_opt {
+                let _ = logger.log_control_output(timestamp_ns, out[0], out[1], out[2]);
+            }
+            let _ = logger.log_vehicle_state(timestamp_ns, &self.fsm.get_state().vehicle_state);
+            let _ = logger.log_flight_phase(timestamp_ns, self.fsm.get_state().flight_phase, self.current_time);
+        }
+
         let outside_forces = Vector3::new(0.0, 0.0, 0.0);
         let outside_torques = Vector3::new(0.0, 0.0, 0.0);
 
