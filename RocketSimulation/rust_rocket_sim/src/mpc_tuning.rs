@@ -29,29 +29,28 @@ pub struct MpcWeights {
 
 impl MpcWeights {
     pub fn random(rng: &mut impl Rng) -> Self {
+        // Log-uniform over wide ranges: the old boxes (q_pos_xy 10-100 vs q_q_xy 0.5-2.5e6) never let
+        // the MPC trade tilt for position, so a vertical descent drifted 10 m sideways and aborted
+        let mut log_range = |lo: f64, hi: f64| 10f64.powf(rng.gen_range(lo.log10()..hi.log10()));
         Self {
-            // 🚀 SMOOTH THE DESCENT: Increase Vz damping, reduce horizontal panic
-            q_pos_xy: rng.gen_range(10.0..100.0),      
-            q_pos_z: rng.gen_range(500.0..1500.0),
-            q_vel_xy: rng.gen_range(100.0..500.0),
-            q_vel_z: rng.gen_range(10_000.0..30_000.0), 
-            
-            // 🚀 PRIORITIZE UPRIGHT: Relaxed slightly so it can tilt to brake horizontally
-            q_q_xy: rng.gen_range(500_000.0..2_500_000.0),
-            q_omega_xy: rng.gen_range(5000.0..20_000.0),
-            q_omega_z: rng.gen_range(100.0..1000.0),
+            q_pos_xy: log_range(10.0, 1e5),
+            q_pos_z: log_range(100.0, 1e4),
+            q_vel_xy: log_range(100.0, 1e5),
+            q_vel_z: log_range(1e3, 1e5),
+            q_q_xy: log_range(1e3, 2.5e6),
+            q_omega_xy: log_range(100.0, 2e4),
+            q_omega_z: 0.0, // no input makes yaw torque, so yaw-rate weights have no effect
 
-            // 🚀 PREVENT LAST-SECOND PANIC
-            qn_pos_xy: rng.gen_range(10.0..100.0), 
-            qn_pos_z: rng.gen_range(1000.0..5000.0),
-            qn_vel_xy: rng.gen_range(100.0..500.0), 
-            qn_vel_z: rng.gen_range(10_000.0..30_000.0), 
-            qn_q_xy: rng.gen_range(500_000.0..2_500_000.0), 
-            qn_omega_xy: rng.gen_range(5000.0..20_000.0),
-            qn_omega_z: rng.gen_range(5000.0..20_000.0),
+            qn_pos_xy: log_range(10.0, 1e5),
+            qn_pos_z: log_range(100.0, 1e4),
+            qn_vel_xy: log_range(100.0, 1e5),
+            qn_vel_z: log_range(1e3, 1e5),
+            qn_q_xy: log_range(1e3, 2.5e6),
+            qn_omega_xy: log_range(100.0, 2e4),
+            qn_omega_z: 0.0,
 
-            r_gimbal: rng.gen_range(10.0..250.0),       
-            r_thrust: rng.gen_range(0.01..0.05), // Keep at >= 0.01 to prevent Ill-Conditioned Matrix
+            r_gimbal: log_range(1.0, 250.0),
+            r_thrust: log_range(0.001, 0.05),
         }
     }
 
