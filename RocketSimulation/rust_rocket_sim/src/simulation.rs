@@ -34,6 +34,8 @@ pub struct Simulation {
     pub end_state: String,
     pub end_stage: i32,
     pub rec: Option<RecordingStream>,
+    /// Feed the FSW the true state instead of its navigator's estimate (MPC-only tuning)
+    pub truth_state: bool,
 }
 
 impl Default for Simulation {
@@ -54,6 +56,7 @@ impl Default for Simulation {
             end_state: "none".to_string(),
             end_stage: 0,
             rec: None,
+            truth_state: false,
         }
     }
 }
@@ -172,6 +175,30 @@ impl Simulation {
         }
 
         let sensor_data = self.sensor_data();
+
+        if self.truth_state {
+            // Stamping last_sensor_update makes the FSM skip its navigator this tick, so the MPC sees truth
+            let state = self.fsm.get_state_mut();
+            let vs = &mut state.vehicle_state;
+            vs.position.x = self.rocket.position.x;
+            vs.position.y = self.rocket.position.y;
+            vs.position.z = self.rocket.position.z;
+            vs.velocity.x = self.rocket.velocity.x;
+            vs.velocity.y = self.rocket.velocity.y;
+            vs.velocity.z = self.rocket.velocity.z;
+            vs.angular_velocity.x = self.rocket.ang_vel.x;
+            vs.angular_velocity.y = self.rocket.ang_vel.y;
+            vs.angular_velocity.z = self.rocket.ang_vel.z;
+            // Lander uses a different nalgebra version, so copy the quaternion coords [i, j, k, w] directly
+            let q = &mut vs.attitude.as_mut_unchecked().coords;
+            for i in 0..4 {
+                q[i] = self.rocket.attitude.coords[i];
+            }
+            vs.mass = mass;
+            state.mass = mass;
+            state.last_sensor_update = self.current_time;
+            state.last_position_update = self.current_time;
+        }
 
         // Step the Flight State Machine
         let control_input_opt = self.fsm.step(&sensor_data);
