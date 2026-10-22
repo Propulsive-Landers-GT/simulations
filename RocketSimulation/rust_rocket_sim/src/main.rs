@@ -99,16 +99,19 @@ fn main() {
         return;
     }
 
-    let mode_tune = false; // Set to true to run the genetic algorithm, false for a standard flight
+    // `cargo run --release -- --tune [population] [generations] > /dev/null`: headless MPC weight tuning
+    // on a straight vertical descent (progress goes to stderr; the FSW's per-step prints go to stdout)
+    let mode_tune = args.iter().any(|a| a == "--tune");
 
     if mode_tune {
-        let tuner = MPC_Simulation::new();
-        let best_weights = tuner.run_genetic_algorithm();
-        
-        println!("\n🏆 TUNING COMPLETE! Optimal MPC Descent Configuration 🏆");
-        println!("{:#?}", best_weights);
-        println!("Copy these values into your `FlightPhase::Descent` initialization block!");
-        
+        let arg = |i: usize, default: usize| args.get(i).and_then(|s| s.parse().ok()).unwrap_or(default);
+        let tuner = MPC_Simulation::new(arg(2, 22), arg(3, 5));
+        let (best_weights, history) = tuner.run_genetic_algorithm();
+
+        eprintln!("\n🏆 TUNING COMPLETE! Optimal MPC Descent Configuration 🏆");
+        eprintln!("{:#?}", best_weights);
+        mpc_tuning::write_report(&best_weights, &history).unwrap();
+
     } else {
         // Your original simulation logic
         let mut sim = Simulation::default();

@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use rand::Rng;
 use nalgebra::Vector3;
 use ndarray::{Array1, Array2};
+use std::io::Write;
 
 #[derive(Debug, Clone, Copy)]
 pub struct MpcWeights {
@@ -53,6 +54,27 @@ impl MpcWeights {
             r_thrust: rng.gen_range(0.01..0.05), // Keep at >= 0.01 to prevent Ill-Conditioned Matrix
         }
     }
+
+    /// (Q, R, QN) diagonals in the MPC's order [x y z | qx qy qz qw | vx vy vz | wx wy wz], [theta phi thrust]
+    pub fn matrices(&self) -> (Array2<f64>, Array2<f64>, Array2<f64>) {
+        let q_vec = vec![
+            self.q_pos_xy, self.q_pos_xy, self.q_pos_z,
+            self.q_q_xy, self.q_q_xy, 0.0, 0.0,
+            self.q_vel_xy, self.q_vel_xy, self.q_vel_z,
+            self.q_omega_xy, self.q_omega_xy, self.q_omega_z
+        ];
+        let qn_vec = vec![
+            self.qn_pos_xy, self.qn_pos_xy, self.qn_pos_z,
+            self.qn_q_xy, self.qn_q_xy, 0.0, 0.0,
+            self.qn_vel_xy, self.qn_vel_xy, self.qn_vel_z,
+            self.qn_omega_xy, self.qn_omega_xy, self.qn_omega_z
+        ];
+        (
+            Array2::<f64>::from_diag(&Array1::from(q_vec)),
+            Array2::<f64>::from_diag(&Array1::from(vec![self.r_gimbal, self.r_gimbal, self.r_thrust])),
+            Array2::<f64>::from_diag(&Array1::from(qn_vec)),
+        )
+    }
 }
 
 pub struct MPC_Simulation {
@@ -63,32 +85,32 @@ pub struct MPC_Simulation {
 }
 
 impl MPC_Simulation {
-    pub fn new() -> Self {
+    pub fn new(population_size: usize, generations: usize) -> Self {
         MPC_Simulation {
-            population_size: 40,  
-            generations: 25,       
+            population_size,
+            generations,
             mutation_rate: 0.30,   
             elite_count: 5,        
         }
     }
 
-    pub fn run_genetic_algorithm(&self) -> MpcWeights {
-        println!("🚀 Starting MPC Genetic Algorithm Tuner...");
-        println!("CPUs detected: {}. Preparing parallel pool...", rayon::current_num_threads());
+    /// Returns the best weights and each generation's (best, median) score
+    pub fn run_genetic_algorithm(&self) -> (MpcWeights, Vec<(f64, f64)>) {
+        eprintln!("🚀 Starting MPC Genetic Algorithm Tuner...");
+        eprintln!("CPUs detected: {}. Preparing parallel pool...", rayon::current_num_threads());
 
         let mut rng = rand::rng();
         let mut population: Vec<MpcWeights> = (0..self.population_size)
             .map(|_| MpcWeights::random(&mut rng))
             .collect();
+        let mut history = Vec::new();
 
         for generation_idx in 0..self.generations {
             let mut scores: Vec<(usize, f64)> = population
                 .par_iter()
                 .enumerate()
                 .map(|(i, weights)| {
-                    // Fast Tuning: Only simulate the difficult diagonal approach
-                    let start_pos = Vector3::new(-3.5, -3.5, 50.0); 
-                    let score = Self::evaluate_flight(weights, start_pos);
+                    let score = Self::evaluate_flight(Some(weights), None).score;
                     (i, score)
                 })
                 .collect();
@@ -97,11 +119,13 @@ impl MPC_Simulation {
 
             let best_score = scores[0].1;
             let best_weights = population[scores[0].0].clone();
+            let median_score = scores[scores.len() / 2].1;
+            history.push((best_score, median_score));
 
-            println!("🧬 Generation {:02} | Best Score: {:.2}", generation_idx, best_score);
+            eprintln!("🧬 Generation {:02} | Best Score: {:.2} | Median: {:.2}", generation_idx, best_score, median_score);
             
             if generation_idx % 5 == 0 || generation_idx == self.generations - 1 {
-                println!("   ↳ Best Weights: {:#?}", best_weights);
+                eprintln!("   ↳ Best Weights: {:#?}", best_weights);
             }
 
             let mut next_generation = Vec::with_capacity(self.population_size);
@@ -123,209 +147,79 @@ impl MPC_Simulation {
             population = next_generation;
         }
 
-        population[0]
+        (population[0], history)
     }
 
-    fn evaluate_flight(weights: &MpcWeights, start_pos: Vector3<f64>) -> f64 {
+    /// Flies one descent. `None` keeps the FSW's own FlightPhase::Descent weights.
+    pub fn evaluate_flight(weights: Option<&MpcWeights>, mut log: Option<&mut Vec<Sample>>) -> FlightResult {
+        let start_pos = Vector3::new(0.0, 0.0, START_ALTITUDE);
         let mut sim = Simulation::default();
-        sim.debug = false; 
-        
+        sim.truth_state = true;
         sim.rocket.position = start_pos;
-        
-        // 1. Hover initialization
         sim.start_state = "hover".to_string();
         sim.init();
 
-        // 2. Warm start
-        let state_dim = 15;
-        let initial_p = Array2::<f64>::from_diag(&Array1::from_elem(state_dim, 1e-3));
-        let q = Array2::<f64>::from_diag(&Array1::from_elem(state_dim, 1e-5));
-        let initial_nominal = Array1::from(vec![
-            start_pos.x, start_pos.y, start_pos.z,
-            0.0, 0.0, 0.0,
-            1.0, 0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0,
-            0.0, 0.0, 0.0,
-        ]);
-        sim.fsm.autopilot_mut().navigator_mut().inject_state(initial_nominal, initial_p, q);
-
-        {
-            let state = sim.fsm.get_state_mut();
-            state.vehicle_state.position.x = start_pos.x;
-            state.vehicle_state.position.y = start_pos.y;
-            state.vehicle_state.position.z = start_pos.z;
-            state.vehicle_state.velocity.x = 0.0;
-            state.vehicle_state.velocity.y = 0.0;
-            state.vehicle_state.velocity.z = 0.0;
+        // Hold the vehicle at the start point for 1.5 s while the engine settles into hover
+        for _ in 0..150 {
+            sim.step();
+            sim.rocket.position = start_pos;
+            sim.rocket.velocity = Vector3::zeros();
+            sim.rocket.ang_vel = Vector3::zeros();
         }
 
-        // 3. Sensor Shield (Physical Pinning)
-        for _ in 0..150 { 
-            sim.step(); 
-            
-            sim.rocket.position.x = start_pos.x;
-            sim.rocket.position.y = start_pos.y;
-            sim.rocket.position.z = start_pos.z;
-            sim.rocket.velocity.x = 0.0;
-            sim.rocket.velocity.y = 0.0;
-            sim.rocket.velocity.z = 0.0;
-            sim.rocket.ang_vel.x = 0.0;
-            sim.rocket.ang_vel.y = 0.0;
-            sim.rocket.ang_vel.z = 0.0;
-            
-            let state = sim.fsm.get_state_mut();
-            state.vehicle_state.position.x = start_pos.x;
-            state.vehicle_state.position.y = start_pos.y;
-            state.vehicle_state.position.z = start_pos.z;
-            state.vehicle_state.velocity.x = 0.0;
-            state.vehicle_state.velocity.y = 0.0;
-            state.vehicle_state.velocity.z = 0.0;
-            state.vehicle_state.angular_velocity.x = 0.0;
-            state.vehicle_state.angular_velocity.y = 0.0;
-            state.vehicle_state.angular_velocity.z = 0.0;
-        }
-
-        // 4. Trigger Descent Phase
+        // Switch to Descent with guidance locked out, tracking a fixed vertical reference
+        let traj = vertical_reference(START_ALTITUDE, sim.rocket.get_mass());
         sim.fsm.get_state_mut().flight_phase = Lander::state::FlightPhase::Descent;
         sim.fsm.autopilot_mut().set_flight_phase(Lander::state::FlightPhase::Descent);
-        
-        sim.fsm.get_state_mut().last_navigation_update = -1.0;
-
-        let q_vec = vec![
-            weights.q_pos_xy, weights.q_pos_xy, weights.q_pos_z, 
-            weights.q_q_xy, weights.q_q_xy, 0.0, 0.0, 
-            weights.q_vel_xy, weights.q_vel_xy, weights.q_vel_z, 
-            weights.q_omega_xy, weights.q_omega_xy, weights.q_omega_z 
-        ];
-        
-        let qn_vec = vec![
-            weights.qn_pos_xy, weights.qn_pos_xy, weights.qn_pos_z,  
-            weights.qn_q_xy, weights.qn_q_xy, 0.0, 0.0,              
-            weights.qn_vel_xy, weights.qn_vel_xy, weights.qn_vel_z,  
-            weights.qn_omega_xy, weights.qn_omega_xy, weights.qn_omega_z 
-        ];
-
-        let q_matrix = Array2::<f64>::from_diag(&Array1::from(q_vec));
-        let r_matrix = Array2::<f64>::from_diag(&Array1::from(vec![weights.r_gimbal, weights.r_gimbal, weights.r_thrust]));
-        let qn_matrix = Array2::<f64>::from_diag(&Array1::from(qn_vec));
-
-        if let Some(mpc) = sim.fsm.autopilot_mut().mpc_mut() {
-            mpc.set_manual_weights(true, Some(q_matrix), Some(r_matrix), Some(qn_matrix));
+        sim.fsm.get_state_mut().last_navigation_update = 1e9;
+        if let (Some(w), Some(mpc)) = (weights, sim.fsm.autopilot_mut().mpc_mut()) {
+            let (q, r, qn) = w.matrices();
+            mpc.set_manual_weights(true, Some(q), Some(r), Some(qn));
         }
 
-        // CAPTURE START TIME AFTER SHIELD
-        let descent_start_time = sim.current_time;
-
-        let mut steps = 0;
-        let max_steps = 1_500; 
-
-        let mut tracking_error_sum = 0.0;
-        let mut tracking_steps = 0;
-        let mut max_tilt = 0.0_f64;
-        let mut max_descent_rate = 0.0_f64;
-
-        while sim.step() {
-            steps += 1;
-            
-            let tilt_rad = (sim.rocket.attitude * Vector3::z()).z.clamp(-1.0, 1.0).acos();
-            let tilt_deg = tilt_rad.to_degrees();
-            if tilt_deg > max_tilt { max_tilt = tilt_deg; }
-
-            // Track Fall Speed
-            let descent_rate = -sim.rocket.velocity.z;
-            if descent_rate > max_descent_rate { max_descent_rate = descent_rate; }
-
-            // 🚀 HARD FLOOR: Center of mass touches down at 1.5m. Stop simulation!
-            if sim.rocket.position.z <= 1.5 {
-                break; 
+        let descent_start = sim.current_time;
+        let time_limit = traj.time_of_flight_s + 10.0;
+        let mut res = FlightResult::default();
+        let mut sq_err_sum = 0.0;
+        let mut n = 0;
+        loop {
+            {
+                let state = sim.fsm.get_state_mut();
+                state.trajectory_state = Some(traj.clone());
+                state.trajectory_generation_time = descent_start;
             }
 
-            // Early Aborts
-            if sim.rocket.position.z > 60.0 { break; } 
-            if max_tilt > 25.0 { break; } 
-
-            let state = sim.fsm.get_state_mut();
-            if let Some(traj) = &state.trajectory_state {
-                // Fix: Compare current time to when descent ACTUALLY started
-                let time_since_traj = sim.current_time - descent_start_time;
-                
-                let target_pos = if time_since_traj >= traj.time_of_flight_s || traj.positions.is_empty() {
-                    if let Some(&last_pos) = traj.positions.last() {
-                        Vector3::new(last_pos[0], last_pos[1], last_pos[2])
-                    } else {
-                        Vector3::new(0.0, 0.0, 0.0)
-                    }
-                } else {
-                    let divisor = traj.positions.len().saturating_sub(1).max(1) as f64;
-                    let traj_dt = (traj.time_of_flight_s / divisor).max(1e-4);
-                    let exact_idx = time_since_traj / traj_dt;
-                    let base_idx = exact_idx.floor() as usize;
-                    let safe_idx = base_idx.min(traj.positions.len().saturating_sub(2));
-                    let clamped_frac = (exact_idx - safe_idx as f64).clamp(0.0, 1.0);
-                    
-                    let p0 = traj.positions[safe_idx];
-                    let p1 = traj.positions[safe_idx + 1];
-                    
-                    Vector3::new(
-                        p0[0] + clamped_frac * (p1[0] - p0[0]),
-                        p0[1] + clamped_frac * (p1[1] - p0[1]),
-                        p0[2] + clamped_frac * (p1[2] - p0[2])
-                    )
-                };
-                
-                let dist = (sim.rocket.position - target_pos).norm();
-                tracking_error_sum += dist;
-                tracking_steps += 1;
+            let pre_step_vel = sim.rocket.velocity;
+            let alive = sim.step();
+            let t = sim.current_time - descent_start;
+            let pos = sim.rocket.position;
+            let z_ref = reference_z(&traj, t);
+            let err = (pos - Vector3::new(0.0, 0.0, z_ref)).norm();
+            sq_err_sum += err * err;
+            n += 1;
+            let tilt_deg = (sim.rocket.attitude * Vector3::z()).z.clamp(-1.0, 1.0).acos().to_degrees();
+            res.max_tilt_deg = res.max_tilt_deg.max(tilt_deg);
+            if let Some(log) = log.as_deref_mut() {
+                log.push(Sample { t, x: pos.x, y: pos.y, z: pos.z, z_ref, vz: sim.rocket.velocity.z, tilt_deg, thrust: sim.held_control.z });
             }
 
-            if steps > max_steps { break; }
+            if !alive || t > time_limit {
+                // step() returns false on ground contact (which zeroes velocity, so use the pre-step value) or FSM termination
+                res.landed = !alive && !sim.fsm.get_state().flight_terminated;
+                res.touchdown_vz = pre_step_vel.z;
+                res.touchdown_vxy = pre_step_vel.xy().norm();
+                break;
+            }
         }
 
-        let (hit_angle_limit, _final_state) = sim.finish_sim();
-        let mut score = 0.0;
-
-        let final_pos = sim.rocket.position;
-        let final_vel = sim.rocket.velocity;
-
-        if tracking_steps > 0 {
-            let avg_tracking_error = tracking_error_sum / (tracking_steps as f64);
-            score += avg_tracking_error.powi(2) * 50_000.0;
-        }
-
-        // Soft Landing Reward
-        let vel_z = final_vel.z.abs();
-        if vel_z > 3.0 {
-            score += (vel_z - 3.0).powi(2) * 500_000.0; 
-        } else {
-            score += vel_z * 10_000.0;
-        }
-
-        // Punish horizontal misses lightly to prevent wobble
-        let miss_xy = (final_pos.x.powi(2) + final_pos.y.powi(2)).sqrt();
-        score += miss_xy * 2_000.0; 
-        
-        // 🚀 Relaxed Tilt Penalty (Allows horizontal braking maneuvers)
-        if max_tilt > 10.0 {
-            score += (max_tilt - 10.0).powi(2) * 50_000.0;
-        }
-
-        // Smooth Drop Penalty
-        if max_descent_rate > 8.0 {
-            score += (max_descent_rate - 8.0).powi(2) * 100_000.0;
-        }
-
-        score += steps as f64 * 100.0;
-
-        // If it failed to reach the 1.5m pad (e.g. hovered away)
-        if final_pos.z > 2.0 || steps >= max_steps {
-            score += 1_000_000_000.0; 
-        }
-        
-        if hit_angle_limit || max_tilt > 25.0 {
-            score += 2_000_000_000.0; 
-        }
-
-        score
+        res.final_z = sim.rocket.position.z;
+        res.miss_xy = sim.rocket.position.xy().norm();
+        res.rms_track = (sq_err_sum / n.max(1) as f64).sqrt();
+        // Placeholder criteria (m, m/s, deg) until the team agrees on real ones
+        res.score = 10.0 * res.rms_track + 20.0 * res.touchdown_vz.abs() + 5.0 * res.touchdown_vxy
+            + 2.0 * res.miss_xy + 0.5 * res.max_tilt_deg
+            + if res.landed { 0.0 } else { 1000.0 + 10.0 * res.final_z };
+        res
     }
 
     fn crossover_and_mutate(&self, p1: &MpcWeights, p2: &MpcWeights, rng: &mut impl Rng) -> MpcWeights {
@@ -371,4 +265,90 @@ impl MPC_Simulation {
 
         child
     }
+}
+
+// Straight vertical descent from 50 m, MPC only: the FSW gets the true state and a fixed reference,
+// with its navigator and guidance out of the loop, so the score depends on the weights.
+const START_ALTITUDE: f64 = 50.0;
+const REF_DT: f64 = 0.1;
+
+/// Trapezoidal vertical profile: speed up to 5 m/s, cruise, brake to 0.5 m/s by 1 m above touchdown
+/// (CoM at 1.5 m), then keep descending at 0.5 m/s so the vehicle actually makes contact.
+pub fn vertical_reference(z0: f64, mass: f64) -> rust_lossless::TrajectoryResult {
+    let (accel, v_max, v_td, z_brake_end, z_end) = (1.0, 5.0, 0.5, 2.5, 1.0);
+    let (mut z, mut v, mut braking) = (z0, 0.0_f64, false); // v is downward speed
+    let (mut positions, mut velocities, mut thrusts) = (Vec::new(), Vec::new(), Vec::new());
+    while z > z_end {
+        braking |= z - (v * v - v_td * v_td).max(0.0) / (2.0 * accel) <= z_brake_end;
+        let a = if braking { if v > v_td { -accel } else { 0.0 } } else if v < v_max { accel } else { 0.0 };
+        positions.push([0.0, 0.0, z]);
+        velocities.push([0.0, 0.0, -v]);
+        thrusts.push([0.0, 0.0, 9.81 - a]); // per kg, like rust_lossless (the Lander multiplies by mass)
+        v = (v + a * REF_DT).min(v_max);
+        if braking { v = v.max(v_td); }
+        z -= v * REF_DT;
+    }
+    let n = positions.len();
+    rust_lossless::TrajectoryResult {
+        time_of_flight_s: (n - 1) as f64 * REF_DT,
+        masses: vec![mass; n],
+        sigmas: thrusts.iter().map(|t| t[2]).collect(),
+        positions,
+        velocities,
+        thrusts,
+    }
+}
+
+fn reference_z(traj: &rust_lossless::TrajectoryResult, t: f64) -> f64 {
+    let i = (t / REF_DT).max(0.0);
+    let last = traj.positions.len() - 1;
+    let i0 = (i.floor() as usize).min(last);
+    let i1 = (i0 + 1).min(last);
+    let frac = (i - i0 as f64).clamp(0.0, 1.0);
+    traj.positions[i0][2] + frac * (traj.positions[i1][2] - traj.positions[i0][2])
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct FlightResult {
+    pub landed: bool,
+    pub touchdown_vz: f64,
+    pub touchdown_vxy: f64,
+    pub miss_xy: f64,
+    pub rms_track: f64,
+    pub max_tilt_deg: f64,
+    pub final_z: f64,
+    pub score: f64,
+}
+
+/// One logged step of a flight, for plotting
+pub struct Sample {
+    pub t: f64,
+    pub x: f64,
+    pub y: f64,
+    pub z: f64,
+    pub z_ref: f64,
+    pub vz: f64,
+    pub tilt_deg: f64,
+    pub thrust: f64,
+}
+
+/// Writes tuning_history.csv and tuning_flights.csv (shipped vs tuned weights) next to Cargo.toml
+pub fn write_report(best: &MpcWeights, history: &[(f64, f64)]) -> std::io::Result<()> {
+    let mut f = std::fs::File::create("tuning_history.csv")?;
+    writeln!(f, "generation,best,median")?;
+    for (g, (best_score, median)) in history.iter().enumerate() {
+        writeln!(f, "{},{},{}", g, best_score, median)?;
+    }
+
+    let mut f = std::fs::File::create("tuning_flights.csv")?;
+    writeln!(f, "weights,t,x,y,z,z_ref,vz,tilt_deg,thrust")?;
+    for (name, weights) in [("shipped", None), ("tuned", Some(best))] {
+        let mut log = Vec::new();
+        let res = MPC_Simulation::evaluate_flight(weights, Some(&mut log));
+        eprintln!("{:>8}: {:?}", name, res);
+        for s in &log {
+            writeln!(f, "{},{:.3},{:.4},{:.4},{:.4},{:.4},{:.4},{:.3},{:.2}", name, s.t, s.x, s.y, s.z, s.z_ref, s.vz, s.tilt_deg, s.thrust)?;
+        }
+    }
+    Ok(())
 }
