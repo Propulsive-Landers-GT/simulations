@@ -117,15 +117,19 @@ fn main() {
         // sim.rocket.position = Vector3::new(0.0, 0.0, 49.0);
         // sim.start_state = "hover".to_string();
         // sim.min_time = 3.0;
-                // Start an MCAP recording if the user passed --mcap <file>
-        if let Some(i) = args.iter().position(|a| a == "--mcap") {
-            let path = args
-                .get(i + 1)
-                .expect("--mcap needs a file name, e.g. --mcap out.mcap");
-            let logger = McapLogger::new(path).expect("couldn't start the MCAP recording");
-            sim.mcap = Some(logger);
-            println!("Recording flight to {}", path);
-        }
+        // Record every flight to MCAP. The file is overwritten on each run,
+        // so copy it somewhere else first if you want to keep it.
+        // --mcap <file> picks a different name.
+        let path = args
+            .iter()
+            .position(|a| a == "--mcap")
+            .and_then(|i| args.get(i + 1))
+            .map(|name| name.as_str())
+            .unwrap_or("flight_log.mcap");
+        let logger = McapLogger::new(path).expect("couldn't start the MCAP recording");
+        sim.mcap = Some(logger);
+        println!("Recording flight to {}", path);
+
         sim.init();
 
         while sim.step() {}
