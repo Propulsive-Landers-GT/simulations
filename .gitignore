@@ -35,3 +35,4 @@ Algorithms/MOC/Cargo.lock
 *.lock
 *.pyc
 *.mcap
+CLAUDE.md

@@ -1,0 +1,4 @@
+# shortcut: local-only override until the monoprop-flight-software `sim-lib` PR merges; delete this file then.
+[patch."https://github.com/Propulsive-Landers-GT/monoprop-flight-software.git"]
+GroundControl = { path = "../../../monoprop-flight-software/Monoprop/GroundControl" }
+Common = { path = "../../../monoprop-flight-software/Monoprop/Common" }

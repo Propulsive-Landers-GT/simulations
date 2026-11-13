@@ -125,10 +125,13 @@ impl Simulation {
 
         Lander::state::SensorData {
             timestamp: self.current_time,
-            imu_data: Some(Lander::state::ImuData {
-                accel: [imu_reading.accel.x, imu_reading.accel.y, imu_reading.accel.z],
-                gyro: [imu_reading.gyro.x, imu_reading.gyro.y, imu_reading.gyro.z],
-                mag: [imu_reading.mag.x, imu_reading.mag.y, imu_reading.mag.z],
+            imu_data: Some(Lander::state::ImuSample {
+                mag: Some([imu_reading.mag.x, imu_reading.mag.y, imu_reading.mag.z]),
+                ..Lander::state::ImuSample::new(
+                    self.current_time,
+                    [imu_reading.accel.x, imu_reading.accel.y, imu_reading.accel.z],
+                    [imu_reading.gyro.x, imu_reading.gyro.y, imu_reading.gyro.z],
+                )
             }),
             gps_data: Some([gps_reading.position.x, gps_reading.position.y, gps_reading.position.z]),
             uwb_data: if (self.rocket.position - self.rocket.uwb.origin).norm() <= self.rocket.uwb.range {

@@ -22,6 +22,10 @@ use std::io::{Write, BufWriter, Result};
 pub mod mpc_tuning; // 🚀 ADD THIS LINE
 use crate::mpc_tuning::MPC_Simulation; // 🚀 ADD THIS IMPORT
 pub mod ground_station;
+pub mod monoprop;
+pub mod monoprop_sim;
+pub mod monoprop_viz;
+pub mod batch;
 
 
 pub fn export_imu_to_csv(
@@ -99,6 +103,21 @@ fn main() {
         return;
     }
 
+    // `cargo run --release -- --vehicle monoprop`: one Monoprop flight (pad -> 1 m hover -> land) in the Rerun viewer
+    if args.windows(2).any(|w| w[0] == "--vehicle" && w[1] == "monoprop") {
+        run_monoprop_flight();
+        return;
+    }
+    // `cargo run --release -- --batch starts.csv`: headless Monoprop runs, graded into batch_results.csv
+    if let Some(i) = args.iter().position(|a| a == "--batch") {
+        let file = args.get(i + 1).expect("--batch needs a CSV of start positions");
+        if let Err(e) = batch::run(file) {
+            eprintln!("Batch failed: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let mode_tune = false; // Set to true to run the genetic algorithm, false for a standard flight
 
     if mode_tune {
@@ -125,4 +144,33 @@ fn main() {
 
         export_imu_to_csv("flight_data.csv", &sim.rocket.debug_info.times, &sim.rocket.debug_info.imu_readings, &sim.rocket.debug_info.attitudes).unwrap();
     }
+}
+
+fn run_monoprop_flight() {
+    let p = monoprop::MonopropParams::default();
+    let mut sim = batch::sim_from(p, Vector3::new(0.0, 0.0, 0.0), Vector3::zeros());
+    let rec = rerun::RecordingStreamBuilder::new("monoprop_sim")
+        .connect_grpc()
+        .expect("Failed to connect to the Rerun viewer (start it first)");
+    monoprop_viz::log_model(&rec, &p, sim.controller.hover_alt).expect("Rerun logging failed");
+
+    let mut prop_angle = 0.0;
+    let start = std::time::Instant::now();
+    while sim.step() {
+        let _ = monoprop_viz::log_state(&rec, &sim, &mut prop_angle);
+        // Pace to real time so the viewer plays the flight at 1x (batch runs stay full speed)
+        let ahead = sim.t - start.elapsed().as_secs_f64();
+        if ahead > 0.0 {
+            std::thread::sleep(std::time::Duration::from_secs_f64(ahead));
+        }
+        if (sim.t * 100.0).round() as usize % 100 == 0 {
+            let b = &sim.body;
+            let pos = b.reported_position();
+            println!("Time: {:.2}s | Pos: [{:.2}, {:.2}, {:.2}] | Vel: [{:.2}, {:.2}, {:.2}] | Thrust: {:.1} N | Tilt: {:.1} deg",
+                sim.t, pos.x, pos.y, pos.z, b.velocity.x, b.velocity.y, b.velocity.z,
+                b.thrust, b.tilt().to_degrees());
+        }
+    }
+    let _ = monoprop_viz::log_state(&rec, &sim, &mut prop_angle);
+    println!("Outcome: {:?}\n{:#?}", sim.outcome.unwrap(), batch::grade(&sim));
 }

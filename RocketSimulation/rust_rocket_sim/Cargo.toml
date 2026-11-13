@@ -21,6 +21,9 @@ csv = "1.4.0"
 serde = { version = "1", features = ["derive"] }
 Lander = { git = "https://github.com/Propulsive-Landers-GT/monoprop-flight-software.git" }
 MPC = { git = "https://github.com/Propulsive-Landers-GT/control.git" }
+# Monoprop's ground-side MPC loop (MonopropController) and its telemetry/command types.
+GroundControl = { git = "https://github.com/Propulsive-Landers-GT/monoprop-flight-software.git" }
+Common = { git = "https://github.com/Propulsive-Landers-GT/monoprop-flight-software.git" }
 rust_lossless = { git = "https://github.com/Propulsive-Landers-GT/guidance.git" }
 openblas-src = { version = "0.10", features = ["rustls"] }
 rayon = "1.12.0"

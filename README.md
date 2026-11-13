@@ -5,7 +5,7 @@ It has three parts:
 
 | Part | Language | What it does | Status |
 |---|---|---|---|
-| `RocketSimulation/rust_rocket_sim/` | Rust |  A full 6-DOF lander flight (ascent, then hover, then descent) running the real flight software in the loop, with a live 3D view | Active |
+| `RocketSimulation/rust_rocket_sim/` | Rust |  A full 6-DOF lander flight (ascent, then hover, then descent) running the real flight software in the loop, with a live 3D view. Flies Monarch (the rocket) by default, or Monoprop (the small electric test vehicle) with `--vehicle monoprop` | Active |
 | `DynamicsModel/` | Python / MATLAB | Older, simpler models: a 1D fuel sim and the "FHL" 6-DOF + MPC model | Legacy |
 | `SampleData/` | CSV | Old monocopter runs from the MATLAB model, so you can test plotting or estimator code without running a sim first | Reference |
 
@@ -154,6 +154,66 @@ You'll also see `Warning: Failed to load aero lookup table (aero_table.csv: expe
 falling back to static drag.` on startup. Also expected for now: the checked-in table is the wrong shape, so the
 sim uses a simpler drag model.
 
+### Monoprop: the small test vehicle
+The same program can fly Monoprop instead of Monarch: the electric test stand with the yellow rods, 3 rings,
+3 legs, and a gimballed motor and propeller at the bottom. It runs Monoprop's real ground-station MPC
+(`GroundControl` in `monoprop-flight-software`) in the loop. It feeds the controller the true state instead of
+simulated sensors, so if a flight fails here, the problem is in GNC, not avionics.
+
+**One-time setup (until the `sim-lib` branch is merged):** the sim needs the `sim-lib` branch of
+`monoprop-flight-software`, cloned next to this repo:
+
+```bash
+# from the folder that contains `simulations`
+git clone -b sim-lib https://github.com/Propulsive-Landers-GT/monoprop-flight-software
+```
+
+`RocketSimulation/rust_rocket_sim/.cargo/config.toml` points the build at that folder. Once `sim-lib` is merged
+into `main`, delete that file and skip this step.
+
+**Watch one flight:** start the viewer in terminal 1 exactly as for Monarch, then in terminal 2, from
+`RocketSimulation/rust_rocket_sim`:
+
+```bash
+cargo run --release -- --vehicle monoprop
+```
+
+The `--` on its own matters: what comes after it goes to the sim, not to cargo. Without `--vehicle monoprop`,
+you get Monarch.
+
+The flight plays in real time and takes about 13 s. Monoprop starts on the pad, climbs to a 1 m hover,
+gets the land command at t = 10 s, and lands. In Rerun you'll see the vehicle model. The motor tilts with the
+gimbal, the prop spins with thrust, the blue arrow is the thrust, and the small cyan dot is the hover target.
+Monoprop is under 1 m tall, so if you can't see it, double-click `world/monoprop` in the left panel to zoom in.
+To slow it down further, set the Rerun timeline to `sim_time` and lower the playback speed.
+
+The terminal prints one line per second, then the outcome (`Landed`, `Crashed: <why>`, or `Timeout`) and the
+grades: touchdown distance from the pad, touchdown speed, max tilt, hover error, flight time, and peak thrust.
+
+> The solver prints `OpEn QP solve frequency ...` on every step. To hide it, add `| grep -v "OpEn QP"`
+> to the end of the command (macOS/Linux/Git Bash).
+
+**Run many flights at once (for MPC tuning):** make a CSV of start positions. It needs a header row, then
+one start per row, as `x,y,z` or `x,y,z,vx,vy,vz` (meters, m/s). A `z` of 0 means on the pad.
+
+```csv
+x,y,z
+0,0,0
+0.5,0,1
+1,1,2
+-1,0.5,1.5,0.5,0,0
+```
+
+```bash
+cargo run --release -- --batch starts.csv
+```
+
+All the flights run in parallel, with no viewer needed, in well under a second. Each flight gets one row in
+`batch_results.csv`, with the same grades as above.
+
+Heights are given the way the flight computer reports them: about 0.07 m when Monoprop is standing on the pad,
+matching the landing height in GroundControl.
+
 
 ## 3. Changing what the sim does
 
@@ -167,6 +227,9 @@ Everything is configured in code:
 | Change timestep / sim length | `src/simulation.rs` | `dt` (0.01 s) and `min_time` in `Simulation::default()` |
 | Change vehicle physics | `src/rocket_dynamics.rs` | the `Rocket` struct and its `default()` |
 | Sensors, wind, slosh, propellant | `device_sim.rs`, `wind_sim.rs`, `sloshing_sim.rs`, `fluid_dynamics.rs` | |
+| Change Monoprop's mass, size, thrust, gimbal | `src/monoprop.rs` | `MonopropParams::default()`. Mass, max thrust (15.6 N), cage radius, cage height and gimbal pivot are measured; values marked `shortcut:` are still estimates |
+| Change Monoprop's land time or flight length | `src/monoprop_sim.rs` | `land_time` (10 s) and `max_time` (30 s) in `MonopropSim::new` |
+| Change how Monoprop flights are graded | `src/batch.rs` | `grade()` |
 
 Where the "brains" live: the guidance, navigation, and control code is not in this repo. Cargo pulls it from
 the team's other repos (`monoprop-flight-software` provides `Lander`, `control` provides `MPC`, and `guidance`
