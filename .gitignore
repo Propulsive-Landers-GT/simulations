@@ -1,5 +1,5 @@
 venv/
-/.venv
+.venv/
 /.idea
 **/.DS_Store/
 Sensing&Controls/AttitudeEstimation/Fouratis.exe
