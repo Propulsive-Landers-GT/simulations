@@ -40,7 +40,9 @@ impl Default for Simulation {
     fn default() -> Self {
         Self {
             rocket: Rocket::default(),
-            fsm: Lander::fsm::FlightStateMachine::new(),
+            fsm: Lander::fsm::FlightStateMachine::new_with_vehicle(
+                Lander::vehicle::profiles::old_monarch(),
+            ),
             rcs_controller: RcsController::default(),
             held_control: Vector3::new(0.0, 0.0, 80.0 * 9.81),
             dt: 0.01,
@@ -68,6 +70,7 @@ impl Simulation {
             // This connects to the 'rerun --web-viewer' running in your other terminal.
             self.rec = Some(
                 RecordingStreamBuilder::new("rocket_sim")
+                    .recording_name(format!("old_monarch {}", self.start_state))
                     .connect_grpc()
                     .expect("🚨 FATAL: Failed to connect to the Rerun viewer!")
             );
@@ -87,10 +90,21 @@ impl Simulation {
         }
 
         self.has_exceeded_angle = false;
+
+        // Position sensors hold their last reading between updates. Seed that
+        // reading too, so a nonzero start does not initially report the origin.
+        self.rocket.gps.last_reading.position = self.rocket.position;
+        self.rocket.uwb.last_reading.position = self.rocket.position;
         
-        self.fsm.initialize();
-        self.fsm.get_state_mut().mass = self.rocket.get_mass();
-        self.fsm.get_state_mut().vehicle_state.dry_mass = self.rocket.get_dry_mass();
+        // The controller's mass estimate comes from the vehicle profile. The
+        // simulated plant retains its independent component/propulsion model.
+        let mut initial = Lander::state::VehicleState::default();
+        initial.position.copy_from_slice(self.rocket.position.as_slice());
+        initial.velocity.copy_from_slice(self.rocket.velocity.as_slice());
+        // Copy an already-normalized quaternion across the two nalgebra versions.
+        initial.attitude.as_mut_unchecked().coords.copy_from_slice(self.rocket.attitude.coords.as_slice());
+        initial.angular_velocity.copy_from_slice(self.rocket.ang_vel.as_slice());
+        self.fsm.initialize_with_state(initial, self.current_time);
 
         match self.start_state.as_str() {
             "ascent" => {
@@ -125,10 +139,13 @@ impl Simulation {
 
         Lander::state::SensorData {
             timestamp: self.current_time,
-            imu_data: Some(Lander::state::ImuData {
-                accel: [imu_reading.accel.x, imu_reading.accel.y, imu_reading.accel.z],
-                gyro: [imu_reading.gyro.x, imu_reading.gyro.y, imu_reading.gyro.z],
-                mag: [imu_reading.mag.x, imu_reading.mag.y, imu_reading.mag.z],
+            imu_data: Some(Lander::state::ImuSample {
+                mag: Some([imu_reading.mag.x, imu_reading.mag.y, imu_reading.mag.z]),
+                ..Lander::state::ImuSample::new(
+                    self.current_time,
+                    [imu_reading.accel.x, imu_reading.accel.y, imu_reading.accel.z],
+                    [imu_reading.gyro.x, imu_reading.gyro.y, imu_reading.gyro.z],
+                )
             }),
             gps_data: Some([gps_reading.position.x, gps_reading.position.y, gps_reading.position.z]),
             uwb_data: if (self.rocket.position - self.rocket.uwb.origin).norm() <= self.rocket.uwb.range {
@@ -197,6 +214,14 @@ impl Simulation {
             println!("Thrust Vector: {:?}", self.rocket.thrust_vector);
 
             if let Some(rec) = &self.rec {
+                rec.set_duration_secs("simulation_time", self.current_time);
+                let properties = self.fsm.mass_properties();
+                let _ = rec.log("vehicle/estimated_mass_kg", &Scalars::new([properties.mass_kg]));
+                let _ = rec.log("vehicle/plant_mass_kg", &Scalars::new([self.rocket.get_mass()]));
+                for axis in 0..3 {
+                    let _ = rec.log(format!("vehicle/com_m/{axis}"), &Scalars::new([properties.center_of_mass_m[axis]]));
+                    let _ = rec.log(format!("vehicle/inertia_kg_m2/{axis}"), &Scalars::new([properties.inertia_kg_m2[(axis, axis)]]));
+                }
                 let rocket_color = if self.has_exceeded_angle {
                     Color::from_rgb(255, 0, 0)
                 } else {

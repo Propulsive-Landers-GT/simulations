@@ -113,13 +113,40 @@ fn main() {
         // Your original simulation logic
         let mut sim = Simulation::default();
         sim.debug = true;
-        // sim.rocket.position = Vector3::new(0.0, 0.0, 49.0);
-        // sim.start_state = "hover".to_string();
-        // sim.min_time = 3.0;
+        if args.iter().any(|arg| arg == "--no-sensor-noise") {
+            sim.rocket.imu.accel_noise_sigma.fill(0.0);
+            sim.rocket.imu.gyro_noise_sigma.fill(0.0);
+            sim.rocket.imu.mag_noise_sigma.fill(0.0);
+            sim.rocket.gps.pos_noise_sigma.fill(0.0);
+            sim.rocket.uwb.pos_noise_sigma.fill(0.0);
+            sim.rocket.m2_pt.noise_sigma = 0.0;
+            sim.rocket.o_pt.noise_sigma = 0.0;
+            sim.rocket.oa_pt.noise_sigma = 0.0;
+        }
+        if args.iter().any(|arg| arg == "--hover") {
+            sim.rocket.position.z = 49.0;
+            sim.start_state = "hover".to_string();
+            sim.min_time = 3.0;
+        }
+        // Bound test runs even if the vehicle never reaches a terminal phase.
+        let duration = args.windows(2)
+            .find(|pair| pair[0] == "--duration")
+            .map(|pair| pair[1].parse::<f64>().expect("--duration requires seconds"))
+            .unwrap_or(60.0);
 
         sim.init();
 
-        while sim.step() {}
+        let mut controller_log = BufWriter::new(File::create("controller.csv").unwrap());
+        writeln!(controller_log, "time,x,y,z,mass,thrust,theta,phi").unwrap();
+        while sim.current_time < duration && sim.step() {
+            let state = sim.fsm.get_state();
+            writeln!(controller_log, "{},{},{},{},{},{},{},{}",
+                sim.current_time, state.vehicle_state.position.x,
+                state.vehicle_state.position.y, state.vehicle_state.position.z,
+                state.mass, state.last_thrust, state.last_gimbal_theta,
+                state.last_gimbal_phi).unwrap();
+        }
+        controller_log.flush().unwrap();
 
         sim.finish_sim();
 
