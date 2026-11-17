@@ -19,7 +19,6 @@ use nalgebra::{Matrix3, Vector3, Vector4, UnitQuaternion};
 use ndarray::{Array1, Array2};
 use std::fs::File;
 use std::io::{Write, BufWriter, Result};
-use Lander::mcap_logger::McapLogger; // For logging simulation data to MCAP files
 pub mod mpc_tuning; // 🚀 ADD THIS LINE
 use crate::mpc_tuning::MPC_Simulation; // 🚀 ADD THIS IMPORT
 pub mod ground_station;
@@ -126,8 +125,8 @@ fn main() {
             .and_then(|i| args.get(i + 1))
             .map(|name| name.as_str())
             .unwrap_or("flight_log.mcap");
-        let logger = McapLogger::new(path).expect("couldn't start the MCAP recording");
-        sim.mcap = Some(logger);
+        sim.fsm.start_recording(path).expect("couldn't start the MCAP recording");
+
         println!("Recording flight to {}", path);
 
         sim.init();
@@ -135,9 +134,8 @@ fn main() {
         while sim.step() {}
 
         sim.finish_sim();
-        if let Some(logger) = sim.mcap.take() {
-            logger.finish().expect("couldn't finish the MCAP recording");
-        }
+        sim.fsm.stop_recording().expect("couldn't finish the MCAP recording");
+
         export_imu_to_csv("flight_data.csv", &sim.rocket.debug_info.times, &sim.rocket.debug_info.imu_readings, &sim.rocket.debug_info.attitudes).unwrap();
     
         
