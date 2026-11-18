@@ -33,7 +33,7 @@ pub struct Simulation {
     pub start_state: String,
     pub end_state: String,
     pub end_stage: i32,
-    pub rec: Option<RecordingStream>,
+    pub rec: Option<RecordingStream>
 }
 
 impl Default for Simulation {
@@ -53,7 +53,7 @@ impl Default for Simulation {
             start_state: "ascent".to_string(),
             end_state: "none".to_string(),
             end_stage: 0,
-            rec: None,
+            rec: None
         }
     }
 }
@@ -181,6 +181,8 @@ impl Simulation {
         } else {
             Vector4::new(self.held_control.x, self.held_control.y, self.held_control.z, 0.0)
         };
+
+
 
         let outside_forces = Vector3::new(0.0, 0.0, 0.0);
         let outside_torques = Vector3::new(0.0, 0.0, 0.0);

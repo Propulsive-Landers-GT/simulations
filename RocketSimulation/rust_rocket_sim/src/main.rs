@@ -116,13 +116,28 @@ fn main() {
         // sim.rocket.position = Vector3::new(0.0, 0.0, 49.0);
         // sim.start_state = "hover".to_string();
         // sim.min_time = 3.0;
+        // Record every flight to MCAP. The file is overwritten on each run,
+        // so copy it somewhere else first if you want to keep it.
+        // --mcap <file> picks a different name.
+        let path = args
+            .iter()
+            .position(|a| a == "--mcap")
+            .and_then(|i| args.get(i + 1))
+            .map(|name| name.as_str())
+            .unwrap_or("flight_log.mcap");
+        sim.fsm.start_recording(path).expect("couldn't start the MCAP recording");
+
+        println!("Recording flight to {}", path);
 
         sim.init();
 
         while sim.step() {}
 
         sim.finish_sim();
+        sim.fsm.stop_recording().expect("couldn't finish the MCAP recording");
 
         export_imu_to_csv("flight_data.csv", &sim.rocket.debug_info.times, &sim.rocket.debug_info.imu_readings, &sim.rocket.debug_info.attitudes).unwrap();
+    
+        
     }
 }
