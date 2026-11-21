@@ -1,4 +1,12 @@
 pub mod rocket_dynamics;
+pub mod contact;
+pub mod noise;
+#[cfg(test)]
+mod contact_tests;
+#[cfg(test)]
+mod noise_tests;
+#[cfg(test)]
+mod simulation_evidence_tests;
 pub mod device_sim;
 pub mod algorithms;
 pub mod sloshing_sim;

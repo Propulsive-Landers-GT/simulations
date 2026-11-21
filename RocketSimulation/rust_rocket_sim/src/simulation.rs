@@ -59,7 +59,13 @@ impl Default for Simulation {
 }
 
 impl Simulation {
+    /// Observational reason for the most recent step returning false.
+    pub fn stop_reason(&self) -> Option<&crate::contact::SimulationStopReason> {
+        self.rocket.simulation_stop_reason()
+    }
+
     pub fn init(&mut self) {
+        self.rocket.record_simulation_stop(None);
         if self.debug {
             // use "~/.cargo/bin/rerun --web-viewer" to run rereun viewer if "rerun --web-viewer" doesn't work
             println!("Connecting to Rerun Viewer...");
@@ -125,12 +131,13 @@ impl Simulation {
 
         Lander::state::SensorData {
             timestamp: self.current_time,
-            imu_data: Some(Lander::state::ImuData {
-                accel: [imu_reading.accel.x, imu_reading.accel.y, imu_reading.accel.z],
-                gyro: [imu_reading.gyro.x, imu_reading.gyro.y, imu_reading.gyro.z],
-                mag: [imu_reading.mag.x, imu_reading.mag.y, imu_reading.mag.z],
-            }),
+            imu_data: Some(Lander::state::ImuSample::new(
+                self.current_time,
+                [imu_reading.accel.x, imu_reading.accel.y, imu_reading.accel.z],
+                [imu_reading.gyro.x, imu_reading.gyro.y, imu_reading.gyro.z],
+            ).with_mag([imu_reading.mag.x, imu_reading.mag.y, imu_reading.mag.z])),
             gps_data: Some([gps_reading.position.x, gps_reading.position.y, gps_reading.position.z]),
+            uwb_acquired_at: self.rocket.uwb.acquired_at,
             uwb_data: if (self.rocket.position - self.rocket.uwb.origin).norm() <= self.rocket.uwb.range {
                 Some([uwb_reading.position.x, uwb_reading.position.y, uwb_reading.position.z])
             } else {
@@ -143,10 +150,14 @@ impl Simulation {
 
     pub fn step(&mut self) -> bool {
         if self.fsm.get_state().flight_terminated {
+            self.rocket.record_simulation_stop(Some(crate::contact::SimulationStopReason::FlightTerminated {
+                reason: self.fsm.get_state().termination_reason.clone(),
+            }));
             println!("Simulation stopped: FSM terminated. Reason: {:?}", self.fsm.get_state().termination_reason);
             return false;
         }
         if self.fsm.get_state().flight_phase == Lander::state::FlightPhase::Landed {
+            self.rocket.record_simulation_stop(Some(crate::contact::SimulationStopReason::LandedPhase));
             println!("Simulation stopped: Lander successfully landed!");
             return false;
         }
@@ -186,6 +197,9 @@ impl Simulation {
         let outside_torques = Vector3::new(0.0, 0.0, 0.0);
 
         if !self.rocket.step(control_input, outside_forces, outside_torques, self.dt) && self.current_time > self.min_time {
+            self.rocket.record_simulation_stop(Some(crate::contact::SimulationStopReason::PhysicalContact {
+                event_index: self.rocket.contact_events().len() - 1,
+            }));
             return false;
         }
         

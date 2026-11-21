@@ -92,6 +92,7 @@ Mag units are in teslas
 */
 #[derive(Debug, Clone)]
 pub struct IMU {
+    noise_seed: Option<u64>,
     pub accel_noise_sigma: Vector3<f64>,
     pub accel_offset: Vector3<f64>,
 
@@ -117,8 +118,13 @@ pub struct IMUReading {
 }
 
 impl IMU {
+    pub fn set_noise_seed(&mut self, seed: Option<u64>) {
+        self.noise_seed = seed;
+    }
+
     pub fn new(accel_noise_sigma: Vector3<f64>, accel_offset: Vector3<f64>, gyro_noise_sigma: Vector3<f64>, gyro_drift: Vector3<f64>, mag_noise_sigma: Vector3<f64>, mag_offset: Vector3<f64>, earth_mag: Vector3<f64>, update_rate: f64) -> Self {
         Self {
+            noise_seed: None,
             accel_noise_sigma,
             accel_offset,
             gyro_noise_sigma,
@@ -177,7 +183,7 @@ impl IMU {
         // Add Bias + Noise
         let measured_accel = proper_accel_body 
             + self.accel_offset 
-            + noise_3_d(&(self.accel_noise_sigma / dt_sqrt), &mut rng);
+            + sensor_noise_3d(&(self.accel_noise_sigma / dt_sqrt), self.noise_seed, system_time, 0, &mut rng);
 
 
         // 2. GYROSCOPE
@@ -187,7 +193,7 @@ impl IMU {
 
         let measured_gyro = ang_vel_body 
             + self.gyro_drift 
-            + noise_3_d(&(self.gyro_noise_sigma / dt_sqrt), &mut rng);
+            + sensor_noise_3d(&(self.gyro_noise_sigma / dt_sqrt), self.noise_seed, system_time, 1, &mut rng);
 
 
         // 3. MAGNETOMETER
@@ -196,7 +202,7 @@ impl IMU {
         
         let measured_mag = mag_body 
             + self.mag_offset 
-            + noise_3_d(&(self.mag_noise_sigma / dt_sqrt), &mut rng);
+            + sensor_noise_3d(&(self.mag_noise_sigma / dt_sqrt), self.noise_seed, system_time, 2, &mut rng);
 
         self.last_reading = IMUReading {
             accel: measured_accel,
@@ -211,6 +217,7 @@ impl IMU {
 
 #[derive(Debug, Clone)]
 pub struct GPS {
+    noise_seed: Option<u64>,
     pub pos_noise_sigma: Vector3<f64>,
     pub pos_offset: Vector3<f64>,
     pub last_reading: GPSReading,
@@ -225,8 +232,13 @@ pub struct GPSReading {
 }
 
 impl GPS {
+    pub fn set_noise_seed(&mut self, seed: Option<u64>) {
+        self.noise_seed = seed;
+    }
+
     pub fn new(pos_noise_sigma: Vector3<f64>, pos_offset: Vector3<f64>, update_rate: f64) -> Self {
         Self {
+            noise_seed: None,
             pos_noise_sigma,
             pos_offset,
             last_reading: GPSReading {
@@ -255,7 +267,7 @@ impl GPS {
 
         let mut rng = rand::rng();
 
-        let noisy_position = position + self.pos_offset + noise_3_d(&self.pos_noise_sigma, &mut rng);
+        let noisy_position = position + self.pos_offset + sensor_noise_3d(&self.pos_noise_sigma, self.noise_seed, system_time, 0, &mut rng);
 
         self.last_reading = GPSReading {
             position: noisy_position,
@@ -268,6 +280,7 @@ impl GPS {
 
 #[derive(Debug, Clone)]
 pub struct UWB {
+    noise_seed: Option<u64>,
     pub pos_noise_sigma: Vector3<f64>,
     pub pos_offset: Vector3<f64>,
     pub origin: Vector3<f64>,
@@ -276,6 +289,7 @@ pub struct UWB {
 
     pub update_rate: f64, // This is in updates per second
     system_time: f64,
+    pub acquired_at: Option<f64>,
 }
 
 #[derive(Debug, Clone)]
@@ -284,8 +298,13 @@ pub struct UWBReading {
 }
 
 impl UWB {
+    pub fn set_noise_seed(&mut self, seed: Option<u64>) {
+        self.noise_seed = seed;
+    }
+
     pub fn new(pos_noise_sigma: Vector3<f64>, pos_offset: Vector3<f64>, origin: Vector3<f64>, range: f64, update_rate: f64) -> Self {
         Self {
+            noise_seed: None,
             pos_noise_sigma,
             pos_offset,
             origin,
@@ -295,6 +314,7 @@ impl UWB {
             },
             update_rate,
             system_time: 0.0,
+            acquired_at: None,
         }
     }
 
@@ -322,8 +342,9 @@ impl UWB {
         } else {
             let mut rng = rand::rng();
 
-            let noisy_position = position + self.pos_offset + noise_3_d(&self.pos_noise_sigma, &mut rng);
+            let noisy_position = position + self.pos_offset + sensor_noise_3d(&self.pos_noise_sigma, self.noise_seed, system_time, 0, &mut rng);
 
+            self.acquired_at = Some(system_time);
             self.last_reading = UWBReading {
                 position: noisy_position,
             };
@@ -748,6 +769,7 @@ impl RCS {
 ///              run tank.
 #[derive(Debug, Clone)]
 pub struct PressureTransducer {
+    noise_seed: Option<u64>,
     /// Human-readable label for logging (e.g. "m2-pt")
     pub label: String,
     /// Standard deviation of the Gaussian measurement noise [bar].
@@ -771,8 +793,13 @@ pub struct PTReading {
 }
 
 impl PressureTransducer {
+    pub fn set_noise_seed(&mut self, seed: Option<u64>) {
+        self.noise_seed = seed;
+    }
+
     pub fn new(label: &str, noise_sigma: f64, bias: f64, update_rate: f64) -> Self {
         Self {
+            noise_seed: None,
             label: label.to_string(),
             noise_sigma,
             bias,
@@ -803,7 +830,10 @@ impl PressureTransducer {
         self.system_time = system_time;
 
         let mut rng = rand::rng();
-        let noise = noise_1_d(self.noise_sigma, &mut rng);
+        let noise = match self.noise_seed {
+            Some(seed) => crate::noise::noise_1d(seed, system_time, self.noise_sigma),
+            None => noise_1_d(self.noise_sigma, &mut rng),
+        };
 
         self.last_reading = PTReading {
             pressure_bar: true_pressure_bar + self.bias + noise,
@@ -815,6 +845,14 @@ impl PressureTransducer {
 
 
 // Helper to generate 3D noise
+fn sensor_noise_3d(sigma: &Vector3<f64>, seed: Option<u64>, time_s: f64, channel: u64, rng: &mut ThreadRng) -> Vector3<f64> {
+    match seed {
+        Some(seed) => crate::noise::noise_3d(seed, time_s, channel, sigma),
+        None => noise_3_d(sigma, rng),
+    }
+}
+
+// Existing public helper signature and default behavior are preserved.
 pub fn noise_3_d(sigma: &Vector3<f64>, rng: &mut ThreadRng) -> Vector3<f64> {
     let n_x = Normal::new(0.0, sigma.x).unwrap().sample(rng);
     let n_y = Normal::new(0.0, sigma.y).unwrap().sample(rng);
@@ -825,4 +863,17 @@ pub fn noise_3_d(sigma: &Vector3<f64>, rng: &mut ThreadRng) -> Vector3<f64> {
 // Helper to generate 3D noise
 pub fn noise_1_d(sigma: f64, rng: &mut ThreadRng) -> f64 {
     Normal::new(0.0, sigma).unwrap().sample(rng)
+}
+
+#[cfg(test)]
+mod acquisition_tests {
+ use super::*;
+ #[test]
+ fn timestamp_tracks_success_not_attempt_or_value_change() {
+  let mut u=UWB::default(); assert_eq!(u.acquired_at,None);
+  u.update(Vector3::zeros(),0.21); assert_eq!(u.acquired_at,Some(0.21));
+  u.update(Vector3::new(0.0,0.0,20.0),0.42); assert_eq!(u.acquired_at,Some(0.21));
+  u.update(Vector3::zeros(),0.43); assert_eq!(u.acquired_at,Some(0.21));
+  u.update(Vector3::zeros(),0.64); assert_eq!(u.acquired_at,Some(0.64));
+ }
 }
