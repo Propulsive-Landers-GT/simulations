@@ -8,6 +8,7 @@ use crate::aero_tables::*;
 use ndarray::{Array1, Array2, array};
 use std::error::Error;
 use std::fs::File;
+use crate::contact::{PhysicalContactEvent, PhysicalContactReason, PhysicalTruthState, SimulationStopReason};
 
 #[derive(Debug, Clone)]
 pub struct Rocket {
@@ -90,6 +91,9 @@ pub struct Rocket {
     pub nose_offset: Vector3<f64>,
 
     system_time: f64,
+
+    contact_events: Vec<PhysicalContactEvent>,
+    simulation_stop_reason: Option<SimulationStopReason>,
 
     pub debug_info: RocketDebugInfo,
 }
@@ -222,6 +226,8 @@ impl Rocket {
             aero_table,
             nose_offset,
             system_time: 0.0,
+            contact_events: Vec::new(),
+            simulation_stop_reason: None,
             debug_info: RocketDebugInfo {
                 thrust_torque: Vector3::zeros(),
                 total_force: Vector3::zeros(),
@@ -353,6 +359,9 @@ impl Rocket {
     /// torques: Torque vector in Body Frame
     /// Returns true if the step is successful and false if the simulation has ended (hit the ground)
     pub fn step(&mut self, control_input: Vector4<f64>, outside_forces: Vector3<f64>, outside_torques: Vector3<f64>, dt: f64) -> bool {        
+        let start_state = self.truth_snapshot();
+        let step_start_time_s = self.system_time;
+        let start_bottom = self.position + self.attitude.transform_vector(&self.com_to_ground);
         self.debug_info.times.push(self.system_time);
 
         // Update Sensors
@@ -588,6 +597,19 @@ impl Rocket {
         let rotated_offset = self.attitude.transform_vector(&self.com_to_ground);
         let rocket_bottom = self.position + rotated_offset;
         if rocket_bottom.z < 0.0 {
+            self.contact_events.push(PhysicalContactEvent {
+                step_index: self.debug_info.times.len() - 1,
+                step_start_time_s,
+                step_end_time_s: self.system_time,
+                dt_s: dt,
+                start_state,
+                pre_clamp_state: self.truth_snapshot(),
+                start_bottom_position_world_m: [start_bottom.x, start_bottom.y, start_bottom.z],
+                bottom_position_world_m: [rocket_bottom.x, rocket_bottom.y, rocket_bottom.z],
+                started_penetrating: start_bottom.z < 0.0,
+                control_input: [control_input.x, control_input.y, control_input.z, control_input.w],
+                termination_reason: PhysicalContactReason::GroundPlanePenetration,
+            });
             // 1. Shift the rocket UP by the exact amount it went underground.
             // (Because rocket_bottom.z is negative, subtracting it adds positive height)
             self.position.z -= rocket_bottom.z; // Add a small buffer of 1 cm to prevent immediate re-collision on the next frame
@@ -604,6 +626,42 @@ impl Rocket {
         }
 
         return true; // Indicate successful step
+    }
+
+    pub fn contact_events(&self) -> &[PhysicalContactEvent] {
+        &self.contact_events
+    }
+
+    pub fn truth_snapshot(&self) -> PhysicalTruthState {
+        let q = self.attitude.coords;
+        PhysicalTruthState {
+            position_world_m: [self.position.x, self.position.y, self.position.z],
+            velocity_world_mps: [self.velocity.x, self.velocity.y, self.velocity.z],
+            orientation_xyzw: [q[0], q[1], q[2], q[3]],
+            angular_velocity_body_radps: [self.ang_vel.x, self.ang_vel.y, self.ang_vel.z],
+            acceleration_world_mps2: [self.accel.x, self.accel.y, self.accel.z],
+            mass_kg: self.get_mass(),
+        }
+    }
+
+    /// Additive API: constructors/update signatures and default entropy behavior stay intact.
+    /// Set before stepping; None restores the legacy sensor RNG path without resetting clocks.
+    pub fn set_sensor_noise_seed(&mut self, seed: Option<u64>) {
+        use crate::noise::*;
+        self.imu.set_noise_seed(seed.map(|s| sensor_seed(s, IMU)));
+        self.gps.set_noise_seed(seed.map(|s| sensor_seed(s, GPS)));
+        self.uwb.set_noise_seed(seed.map(|s| sensor_seed(s, UWB)));
+        self.m2_pt.set_noise_seed(seed.map(|s| sensor_seed(s, M2_PRESSURE)));
+        self.o_pt.set_noise_seed(seed.map(|s| sensor_seed(s, O_PRESSURE)));
+        self.oa_pt.set_noise_seed(seed.map(|s| sensor_seed(s, OA_PRESSURE)));
+    }
+
+    pub(crate) fn record_simulation_stop(&mut self, reason: Option<SimulationStopReason>) {
+        self.simulation_stop_reason = reason;
+    }
+
+    pub(crate) fn simulation_stop_reason(&self) -> Option<&SimulationStopReason> {
+        self.simulation_stop_reason.as_ref()
     }
 
     pub fn get_mass(&self) -> f64 {

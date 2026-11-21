@@ -54,6 +54,8 @@ impl AeroTable {
         alphas.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
 
         let mut machs: Vec<f64> = records.iter().map(|r| r.mach).collect();
+        // Rows are sorted by angle first, so Mach values repeat at each angle.
+        machs.sort_by(|a, b| a.partial_cmp(b).unwrap());
         machs.dedup_by(|a, b| (*a - *b).abs() < 1e-9);
 
         let n_alpha = alphas.len();
@@ -180,6 +182,21 @@ fn bilinear_interp(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn checked_in_csv_loads_repeated_mach_columns_as_one_axis() {
+        // This exercises CSV construction, unlike the existing in-memory grid tests.
+        let source_file = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file!());
+        let csv_path = source_file.parent().unwrap().join("../aero_table.csv");
+        let table = AeroTable::from_csv(csv_path.to_str().unwrap()).unwrap();
+        assert_eq!(table.alphas, vec![0.0, 45.0, 90.0, 135.0, 180.0]);
+        assert_eq!(table.machs, vec![0.0, 0.05]);
+        assert_eq!(table.grid.len(), 5);
+        assert!(table.grid.iter().all(|row| row.len() == 2));
+        let corner = table.lookup(45.0, 0.0);
+        assert!((corner.cd - 0.75).abs() < 1e-12);
+        assert!((corner.area_ref - 0.10).abs() < 1e-12);
+    }
 
     /// Build a minimal in-memory 2×2 table so tests are hermetic (no file I/O).
     fn tiny_table() -> AeroTable {
